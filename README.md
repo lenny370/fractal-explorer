@@ -1,5 +1,9 @@
 # Mandelbrot Explorer
 
+![Deep zoom 38000 iterations](render_deep_1920x1080.png)
+![Deep zoom render](render_1920x1080.png)
+![bw render](render_bw_1920x1080.png)
+
 Deep-zoom fractal explorer in a single self-contained HTML file. WebGL2 rendering,
 arbitrary-precision reference computation in a web worker, WebCodecs video export.
 No build step, no server, no external dependencies.
