@@ -1,49 +1,89 @@
-# fractal-explorer
+# Mandelbrot Explorer
 
-A deep-zoom fractal explorer in one self-contained HTML file. No build, no server, no dependencies — open it in a browser and dive to zoom 10²⁹⁰ on an ordinary GPU.
+Deep-zoom fractal explorer in a single self-contained HTML file. WebGL2 rendering,
+arbitrary-precision reference computation in a web worker, WebCodecs video export.
+No build step, no server, no external dependencies.
 
-Everything runs locally: WebGL2 shaders for rendering, a web worker for arbitrary-precision math, WebCodecs for video export.
+## Usage
 
-Features
-Seven fractals — Mandelbrot, Julia, Burning Ship, Tricorn, Sierpinski Carpet, Sierpinski Triangle, Koch Snowflake
-Deep zoom — 10²⁹⁰ for the Mandelbrot set (10²⁵ for Burning Ship / Tricorn, 10¹³ for Julia), up to 100,000 iterations
-Video rendering — exponential zoom dives as MP4 (H.264 / HEVC), WebM (VP9 / AV1) or a lossless PNG sequence with ready-made ffmpeg commands; large renders stream straight to disk
-Music-reactive color — load an audio track and the palette pulses and cycles to its energy, bass and transients, with a depth-weighted focus control that lets only the dense structure react; a live preview in the render dialog shows the effect before you commit
-Photo export up to custom resolutions, 2–4× supersampled anti-aliasing
-Shareable states — copy/paste a small JSON blob or save it as a file; coordinates are stored as decimal strings, so states are exact and device-independent
-Six palettes plus custom gradients, color density/shift/animation controls, interior color
-Quick start
-Download mandelbrot-explorer.html
-Open it in Chrome or Edge (WebGL2 required; video export needs WebCodecs)
-Scroll to zoom, drag to pan, double-click to center, H for help
+Open `mandelbrot-explorer.html` in a Chromium-based browser.
+Scroll/pinch to zoom, drag to pan, double-click to center, `H` for the help overlay.
 
-Hardware floats die early: past zoom ~10¹³, neighbouring pixels round to the same float64 coordinate and the image degenerates. The explorer stacks five techniques, each born from the failure of the previous one:
+## Fractals and limits
 
-#	Technique	What it solves
-1	Arbitrary-precision reference	One orbit per view is computed in BigInt fixed-point (hundreds of bits) in a worker. Only one.
-2	Perturbation (K. I. Martin)	Every pixel is a tiny offset δ from the reference. The huge coordinates cancel algebraically — δ' = 2Zδ + δ² + δc — so per-pixel math fits in float32 on the GPU.
-3	Rebasing (Zhuoran)	When a pixel's value dips below its own δ, it restarts against iteration 0 of the same reference. Exact for the Mandelbrot set (Z₀ = 0); replaces classical glitch detection entirely.
-4	floatexp	float32 underflows at 10⁻⁴⁵, but deep deltas go far below. A float32 mantissa paired with a separate exponent extends the range to ~10^±10⁸; a dedicated deep shader takes over past zoom ~10²⁵.
-5	BLA (bivariate linear approximation, Zhuoran / Fraktaler-3)	While δ is small the iteration is effectively linear, and linear steps compose. A precomputed binary tree lets each pixel skip 2…8192 iterations in a single multiply-add — falling back to exact steps precisely where rebasing has to run anyway.
+| Fractal | Max zoom | Engine |
+|---|---|---|
+| Mandelbrot | 10²⁹⁰ | GPU perturbation, floatexp past ~10²⁵, BLA |
+| Burning Ship, Tricorn | 10²⁵ | GPU perturbation |
+| Julia | 10¹³ | GPU perturbation, CPU float64 fallback for lake-anchored views |
+| Sierpinski Carpet, Sierpinski Triangle, Koch | 10³⁰ / 10³⁰ / 10⁴ | GPU geometric (exact BigInt prefix walk) |
 
-The numerics were developed test-first: every algorithm was validated against exact BigInt per-pixel iteration (and, where possible, independent constructions) in Node harnesses before touching the shaders. The HUD shows which engine is active — GPU·pert, GPU·pert-fx (floatexp), +bla when skip tables are live, GPU·geo for the geometric fractals, or the CPU fallback.
+Iteration limit 100,000. Anti-aliasing 2–4× supersampling. The HUD shows the active
+engine: `GPU·pert`, `GPU·pert-fx` (floatexp), `+bla` suffix when skip tables are
+active, `GPU·geo`, or `CPU·Nw`.
 
-A companion page, engine-notes.html, explains all five techniques with interactive instruments that compute the real formulas live.
+## Depth
 
-Performance
-Interactive frames are paced to what the GPU sustains; the frames in between are cheap affine transforms of the last render, so motion stays at display rate even when the GPU manages far fewer true frames
-Adaptive iteration budget and resolution during motion (FAST), or full-resolution interactive frames (CRISP) — selectable
-Heavy final renders draw progressively in bands and cancel instantly on input
-A probe pass measures the actual iteration requirement of each view, cutting the depth heuristic down where deep regions are genuinely simple
-Background tabs keep rendering videos at full speed (worker-based timing instead of throttled requestAnimationFrame)
-Video rendering notes
+Native floats fail on coordinates past zoom ~10¹³ (float64) — adjacent pixels round
+to the same number. The renderer stacks five techniques:
 
-The encoder is calibrated at render start: a short burst of incompressible noise is pushed through candidate configurations (hardware/software, latency and bitrate modes) and the first one that measurably delivers the requested bitrate wins — some platform encoders silently ignore the bitrate parameter otherwise. If no configuration reaches the target, the completion message says so honestly. The PNG sequence export sidesteps hardware encoding entirely and bundles the ffmpeg commands to assemble a master-quality file.
+| Technique | Function |
+|---|---|
+| Arbitrary-precision reference | One orbit per view in BigInt fixed-point (fraction bits scale with depth), computed in a worker. Conversion to float keeps 53 significant bits at any magnitude. |
+| Perturbation (K. I. Martin) | Each pixel is an offset δ from the reference; `δ' = 2Zδ + δ² + δc` contains only small or orbit-sized terms, so per-pixel iteration runs in float32 on the GPU. |
+| Rebasing (Zhuoran) | When `\|z\| < \|δ\|` or the reference ends, the pixel restarts against iteration 0 of the same reference (exact, since Z₀ = 0). Replaces glitch detection and secondary references; bounds float32 error growth. |
+| floatexp | float32 underflows at ~10⁻⁴⁵. A float32 mantissa with a separate exponent extends the range to ~10^±10⁸. A dedicated shader uses it past zoom ~10²⁵ at ~5× per-step cost. |
+| BLA (Zhuoran / Fraktaler-3) | While `\|δ\|` is inside a precomputed validity radius, the iteration is linear and merged steps apply as one multiply-add. A binary tree over the reference provides skips of 2–8192 iterations; radii collapse at the orbit's near-zero passes, forcing exact steps exactly where rebasing fires. The deep shader compares radii in log₂ space. |
 
-Browser support
+All numerics were validated against exact BigInt per-pixel iteration in standalone
+Node harnesses before shader integration.
 
-Chrome / Edge / other Chromium browsers recommended. Requires WebGL2; video export requires WebCodecs; streaming renders to disk use the File System Access API. HEVC and AV1 encoding depend on your GPU and OS exposing them.
+## Rendering pipeline
 
-Credits
+- Interactive GPU frames are paced to measured frame cost; intermediate display
+  frames are affine transforms of the last render, keeping motion at display rate.
+- Adaptive iteration budget and resolution during motion (FAST mode) or
+  full-resolution interactive frames (CRISP mode).
+- Final renders above a cost threshold draw in scissored bands through one shared
+  canvas transform; a band pass cancels on input.
+- A 6×6 float64-perturbation probe measures the actual iteration requirement per
+  view and caps the depth heuristic when every probe escapes (Mandelbrot finals only,
+  never video frames).
+- Reference orbits extend incrementally; orbit and BLA textures rebuild lazily on
+  change.
+- Video renders continue at full speed in background tabs (worker-based timing).
 
-Standing on the shoulders of the deep-zoom community: perturbation theory by K. I. Martin (SuperFractalThing), rebasing and bivariate linear approximation by Zhuoran, floatexp lineage from Kalles Fraktaler and Claude Heiland-Allen's Fraktaler-3. Built in collaboration with Claude (Anthropic).
+## Video export
+
+Exponential zoom dives to MP4 (H.264/HEVC), WebM (VP9/AV1) or a lossless PNG
+sequence with generated ffmpeg assembly commands. Codec level/tier is selected from
+resolution, frame rate and bitrate. At render start the encoder is calibrated: a
+burst of incompressible noise runs through candidate configurations
+(hardware/software, latency mode, bitrate mode) and the first configuration that
+measurably delivers the requested bitrate is used; a shortfall is reported in the
+completion message. Renders above ~800 MB stream to disk via the File System Access
+API. Optional audio track drives palette shift and brightness pulse from energy,
+bass and transient analysis; a depth-weighted focus parameter restricts the reaction
+to dense structure. The render dialog previews color and reactivity settings on a
+fixed precomputed region.
+
+## State format
+
+Views export as JSON (clipboard or file): decimal-string coordinates, world-space
+height and all parameters. States are exact and device-independent.
+
+## Requirements
+
+Chromium-based browser. WebGL2 (rendering), WebCodecs (video), File System Access
+API (streamed renders). HEVC/AV1 encoding depend on GPU and OS support.
+
+## Documentation
+
+`engine-notes.html` — interactive companion page explaining the five techniques
+with live-computed instruments.
+
+## Credits
+
+Perturbation theory: K. I. Martin (SuperFractalThing). Rebasing and bivariate
+linear approximation: Zhuoran. floatexp lineage: Kalles Fraktaler,
+Claude Heiland-Allen (Fraktaler-3). Built in collaboration with Claude (Anthropic).
